@@ -19,7 +19,7 @@ Files:
 - data
   - ChlorData.geojson - a Json file that includes US state geomotry and additional data to coorespond to those
   - Fatal.csv - The Fatal dataset after the removal of some columns
-- 
+
 
 Credits: 
 Dataset provided by: https://fatalencounters.org/
