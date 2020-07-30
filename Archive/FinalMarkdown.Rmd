@@ -1,0 +1,335 @@
+---
+title: "FinalProjMarkdown"
+author: "Jake and Robert"
+date: "7/21/2020"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(dplyr)
+library(ggplot2)
+library(stopwords)
+library(wordcloud)
+library(leaflet)
+library(geojsonio)
+library(tidytext)
+library(tm)
+library(tidyr)
+
+```
+
+```{r data cleaning, include=FALSE}
+df <- read.csv("data\\RawFatalEncounters.csv", stringsAsFactors = FALSE) #Raw data file from Fatal Encounters
+StatePops <- read.csv("data\\StatesData.csv", stringsAsFactors = FALSE) #The population data for each state
+States <- geojsonio::geojson_read("data/us-states.geojson", what = "sp") #Our spatial dataset containing polygons for each state 
+
+# Dropped columns: 
+# names to remove identifiable info
+# URL video / Unique ID removed due to many missing values
+# Unique ID, Location.of.injury..address, Date.Description, and Date..Year are redundant 
+# Symptoms column and Disposition column are indicated to not be used for data analysis.  Both columns are not collected prior to 2020 so lots of missing values
+# The Intentional Use of Force column is noted to be unreliable in the documentation so it is removed as well 
+df <- df %>% select(-c(Video, Unique.identifier..redundant., Unique.ID.formula, Location.of.injury..address., Symptoms.of.mental.illness..INTERNAL.USE..NOT.FOR.ANALYSIS, Dispositions.Exclusions.INTERNAL.USE..NOT.FOR.ANALYSIS, Intentional.Use.of.Force..Developing., Date.Description)) 
+
+# Rename columns to simplify 
+df <- df %>% rename(
+  id = Unique.ID,
+  subject_name = Subject.s.name, 
+  subject_age = Subject.s.age,
+  subject_gender = Subject.s.gender,
+  subject_race = Subject.s.race,
+  date_injury = Date.of.injury.resulting.in.death..month.day.year.,
+  subject_race_with_imputations = Subject.s.race.with.imputations,
+  imputation_probability = Imputation.probability,
+  city = Location.of.death..city.,
+  state = Location.of.death..state.,
+  zip = Location.of.death..zip.code.,
+  county = Location.of.death..county.,
+  address = Full.Address,
+  agency_responsible_for_death = Agency.responsible.for.death,
+  cause_of_death = Cause.of.death,
+  description = A.brief.description.of.the.circumstances.surrounding.the.death,
+  link = Link.to.news.article.or.photo.of.official.document,
+  photo = URL.of.image.of.deceased, 
+  year = Date..Year.
+)
+
+# Amend values for imputation probability to NA if they do not exist
+df$imputation_probability[df$imputation_probability == 'Not imputed'] <- NA
+df$imputation_probability[df$imputation_probability == 'Race not determined'] <- NA
+
+# Amend data types
+df$subject_gender <- as.factor(df$subject_gender)
+df$subject_age <- as.integer(df$subject_age)
+df$subject_race <- as.factor(df$subject_race)
+df$subject_race_with_imputations <- as.factor(df$subject_race_with_imputations)
+df$date_injury <- as.Date(df$date_injury, format='%m/%d/%Y')
+df$state <- as.factor(df$state)
+df$imputation_probability <- as.numeric(df$imputation_probability)
+
+# Remove bad data
+df <- df %>% filter(format(date_injury, '%Y') <= 2020) #There is a row with a date showing the year 2100 and blank data otherwise
+
+summary(df)
+
+### Amending State Populations Dataset.  Rename state column and remove some unused data
+StatePops <- StatePops %>%
+  rename(State = ï..State) %>%
+  select(Abrv, State, Pop2010)
+
+# Clean the GeoJson File by removing puerto rico 
+States <- States[-52, ]
+
+write.csv(df, file = 'data/Fatal.csv')
+
+
+
+```
+
+```{r data prep chloropleth, include=FALSE}
+ChlorData <- df %>%
+  select(subject_age, subject_gender, subject_race, date_injury, state, cause_of_death) %>% 
+  group_by(state) %>%
+  summarise(
+    Deaths = n(), 
+    Avg_Age = mean(subject_age, na.rm = TRUE)
+  )
+
+#Get a column for females and males split
+Male_Gender <- df %>% select(state, subject_gender) %>% group_by(state) %>% count(subject_gender, .drop = FALSE) %>% filter(subject_gender == 'Male') %>% 
+  rename(Num_Males = n) %>% select(-subject_gender)
+Female_Gender <- df %>% select(state, subject_gender) %>% group_by(state) %>% count(subject_gender, .drop = FALSE) %>% filter(subject_gender == 'Female') %>% 
+  rename(Num_Females = n) %>% select(-subject_gender)
+
+ChlorData <- merge(ChlorData, Male_Gender)
+ChlorData <- merge(ChlorData, Female_Gender)
+
+#Get a column for Race 
+African <- df %>% select(state, subject_race) %>% group_by(state) %>% count(subject_race, .drop = FALSE) %>% filter(subject_race == 'African-American/Black') %>%
+  rename(Num_Black = n) %>% select(-subject_race)
+ChlorData <- merge(ChlorData, African)
+
+Asian <- df %>% select(state, subject_race) %>% group_by(state) %>% count(subject_race, .drop = FALSE) %>% filter(subject_race == 'Asian/Pacific Islander') %>% 
+  rename(Num_Asian = n) %>% select(-subject_race)
+ChlorData <- merge(ChlorData, Asian)
+
+White <- df %>% select(state, subject_race) %>% group_by(state) %>% count(subject_race, .drop = FALSE) %>% filter(subject_race == 'European-American/White') %>% 
+  rename(Num_White = n) %>% select(-subject_race)
+ChlorData <- merge(ChlorData, White)
+
+Hispanic <- df %>% select(state, subject_race) %>% group_by(state) %>% count(subject_race, .drop = FALSE) %>% filter(subject_race == 'Hispanic/Latino') %>% 
+  rename(Num_Hispanic = n) %>% select(-subject_race)
+ChlorData <- merge(ChlorData, Hispanic)
+
+MidEast <- df %>% select(state, subject_race) %>% group_by(state) %>% count(subject_race, .drop = FALSE) %>% filter(subject_race == 'Middle Eastern') %>% 
+  rename(Num_MidEastern = n) %>% select(-subject_race)
+ChlorData <- merge(ChlorData, MidEast)
+
+NatAm <- df %>% select(state, subject_race) %>% group_by(state) %>% count(subject_race, .drop = FALSE) %>% filter(subject_race == 'Native American/Alaskan') %>% 
+  rename(Num_NativeAmer = n) %>% select(-subject_race)
+ChlorData <- merge(ChlorData, NatAm)
+
+Unknown <- df %>% select(state, subject_race) %>% group_by(state) %>% count(subject_race, .drop = FALSE) %>% filter(subject_race == 'Race unspecified') %>% 
+  rename(Num_Unknown = n) %>% select(-subject_race)
+ChlorData <- merge(ChlorData, Unknown)
+
+# Join the population data and state's full names to our dataset
+ChlorData <- inner_join(ChlorData, StatePops, by=c('state' = 'Abrv'))
+ChlorData <- ChlorData %>% rename(name = State)
+
+ChlorData$DeathsPer10000 <- ChlorData$Deaths / ChlorData$Pop2010 * 10000
+
+# merge to our spatial dataset 
+States@data <- merge(States@data, ChlorData)
+
+geojson_write(States, file='data/ChorData.geojson')
+
+```
+
+```{r Age Hist, include=TRUE}
+df %>% ggplot(aes(x=subject_age)) + 
+  geom_histogram(bins = 40, fill='#0082D1', color='#033C5E') +
+  scale_y_continuous(breaks = round(seq(0, 4000, by = 500), 1)) +
+  scale_x_continuous(breaks = round(seq(0, 100, by=25), 1)) +
+  xlab('Age')
+```
+
+```{r Deaths over time, include=TRUE}
+df %>% ggplot(aes(x=date_injury)) + 
+  geom_density(fill = 'lightblue') +
+  scale_x_date(date_breaks = '2 years', date_labels = '%Y') +
+  xlab('Year') + 
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+    )
+```
+
+```{r chloropleth, include=TRUE}
+bins <- c(0, 0.73, 0.88, 1, 1.20, Inf)
+#bins <- c(0, 250, 500, 750, 1000, 1500, Inf)
+d <- States$DeathsPer10000
+palette <- colorBin("YlOrRd", domain = d, bins = bins, na.color = 'transparent')
+content <- as.character(tagList())
+  
+basemap <- leaflet(States) %>%
+  addTiles(
+    urlTemplate = "//{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+    attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>', 
+    options = tileOptions(minZoom = 4, maxZoom = 4)
+  ) %>% 
+  setView(lat=38.978178, lng= -96, 4) %>%
+  addPolygons(
+    fillColor = ~palette(DeathsPer10000),
+    weight = 1,
+    opacity = 1,
+    color = 'white',
+    fillOpacity = 0.7,
+    highlight = highlightOptions(
+      weight = 4, 
+      color = 'black',
+      bringToFront = TRUE
+    ),
+    popup = paste0('<strong>State: </strong>', States$name, '<br>',
+                   '<strong># Deaths: </strong>', format(States$Deaths, nsmall=1, big.mark=','), '<br>',
+                   '<strong>2010 Population: </strong>', format(States$Pop2010, nsmall=1, big.mark=',')),
+    popupOptions = popupOptions(
+      
+    )
+  ) %>%
+  addLegend(pal = palette, values = d, title = '# Deaths', position = 'bottomleft', opacity = 0.75)
+
+basemap
+
+```
+
+```{r PointsMap}
+test <- 'subject_race'
+
+pal <- colorFactor(c('blue', 'yellow', 'red', 'grey', 'navy', 'orange', 'white'), domain = df$subject_race)
+
+basemap <- leaflet(data = df) %>%
+  addTiles(
+    urlTemplate = "//{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+    attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>', 
+    options = tileOptions(minZoom = 4)
+  ) %>% 
+  setView(lat=38.978178, lng= -96, 4) %>% 
+  addCircleMarkers(
+    radius = 3, 
+    lat = ~df$Latitude,
+    lng = ~df$Longitude,
+    color = ~pal(subject_race), 
+    fillOpacity = 0.7,
+    stroke = FALSE, 
+    layerId = ~subject_name, 
+    popup = paste(paste0('<center><img src="', df$photo, '" height=200px ></img></center> <br>', 
+                         '<strong>Name: </strong>', df$subject_name, '<br>',
+                         '<strong>Age: </strong>', df$subject_age, '<br>',
+                         '<strong>Gender: </strong>', df$subject_gender, '<br>',
+                         '<strong>Incident Date: </strong>', df$date_injury, '<br>',
+                         '<strong>Cause: </strong>', df$cause_of_death, '<br>',
+                         '<strong>Location: </strong>', df$city, ' ', df$state, '<br>',
+                         '<strong>Link: </strong>', '<a href="', df$link, '">', df$link, '</a>', '<br>'
+                  )),
+    popupOptions = popupOptions(autoPan = FALSE)
+    )
+    
+basemap
+
+```
+
+```{r Gender Bar, include=TRUE}
+
+        m <- 4
+        f <- 7
+        
+        data <- data.frame(Gender = c('Male', 'Female'), Count = c(m, f))
+        
+        data %>% ggplot(aes(x = Gender, y = Count)) +
+          geom_col(fill = '#0091E8', color = '#003A5C', width = c(0.1, 0.1), alpha = 0.1) +
+          geom_text(aes(label=Count), hjust = -1, size = 4) +
+          coord_flip()
+        
+
+```
+
+```{r}
+
+
+```
+
+```{r WordCloud, include=TRUE}
+
+# writeLines(text, 'data/description.txt')
+
+text <- df  %>%
+  select(text = description, cause_of_death)
+text <- text %>% unnest_tokens(word, text) %>% count(cause_of_death, word, sort = TRUE) 
+text <- text %>% anti_join(stop_words, by = 'word') #Remove Stop Words 
+
+cause <- 'All'
+
+if (cause == 'All'){
+  v <- text 
+} else {
+  v <- text %>% filter(cause_of_death == cause)
+}
+
+wordpal <- brewer.pal(8, 'Set1')
+
+v %>% 
+  with(
+    wordcloud(word,
+              n,
+              scale = c(2, 1), 
+              random.order = FALSE,
+              colors = wordpal,
+              max.words = 50
+              ))
+
+
+```
+
+``` {r test wordcloud 2}
+
+
+
+# Filter by cause of death 
+text <- tibble(text = wordset$description)
+mycorpus <- Corpus(VectorSource(text))
+
+mycorpus <- tm_map(mycorpus, removePunctuation)
+mycorpus <- tm_map(mycorpus, removeNumbers)
+mycorpus <- tm_map(mycorpus, function(x) removeWords(x,stopwords("english")))
+
+dtm <- TermDocumentMatrix(mycorpus)
+dtm <- as.matrix(dtm)
+colnames(dtm) <- "text"
+
+comparison.cloud(text)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
