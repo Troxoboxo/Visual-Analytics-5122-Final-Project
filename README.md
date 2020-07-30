@@ -12,9 +12,9 @@ Below is a comment provided by the website to provide context on it's creation a
 Files:
 - server.R - Server file for the R Shiny App 
 - ui.R - UI File for the R Shiny App 
-- R Markdown - shows data cleaning and some of the work used to create the visualizations
+- Archive
+  - R Markdown - shows data cleaning and some of the work used to create the visualizations
 - documents 
-  - R Markdown used to generate the PDF document 
   - Our paper - PDF detailing our work and thought process for the project 
 - data
   - ChlorData.geojson - a Json file that includes US state geomotry and additional data to coorespond to those
